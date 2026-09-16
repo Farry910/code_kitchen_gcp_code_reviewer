@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>24/7 Intelligent Code Reviewer</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    margin: 0; padding: 2rem; max-width: 960px; margin-inline: auto;
+    line-height: 1.5;
+  }
+  h1 { margin: 0 0 .25rem; font-size: 1.6rem; }
+  p.sub { margin: 0 0 1.5rem; opacity: .7; }
+  label { font-weight: 600; font-size: .85rem; display: block; margin: 1rem 0 .35rem; }
+  textarea, input, button {
+    font: inherit; width: 100%; padding: .6rem .7rem;
+    border: 1px solid #8886; border-radius: 8px; background: #8881;
+  }
+  textarea { min-height: 260px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; }
+  .row { display: flex; gap: 1rem; }
+  .row > div { flex: 1; }
+  button {
+    margin-top: 1rem; cursor: pointer; font-weight: 600;
+    background: #2563eb; color: #fff; border: none;
+  }
+  button:disabled { opacity: .6; cursor: progress; }
+  .hint { font-size: .75rem; opacity: .55; margin: .35rem 0 0; }
+  #out { margin-top: 2rem; }
+  .rating { font-size: 3rem; font-weight: 800; }
+  .rating small { font-size: 1rem; font-weight: 500; opacity: .6; }
+  .card { border: 1px solid #8884; border-radius: 10px; padding: 1rem; margin: .6rem 0; }
+  .sev { font-size: .7rem; text-transform: uppercase; font-weight: 700; letter-spacing: .04em;
+         padding: .1rem .45rem; border-radius: 6px; background: #8883; }
+  .critical, .high { background: #ef444433; color: #ef4444; }
+  .medium { background: #f59e0b33; color: #b45309; }
+  .low, .info { background: #10b98133; color: #059669; }
+  .meta { opacity: .6; font-size: .8rem; }
+  .badge { font-size: .7rem; font-weight: 700; padding: .1rem .45rem; border-radius: 6px;
+           background: #10b98133; color: #059669; vertical-align: middle; }
+  ul { margin: .3rem 0; padding-left: 1.1rem; }
+</style>
+</head>
+<body>
+  <h1>🤖 24/7 Intelligent Code Reviewer</h1>
+  <p class="sub">Multi-language reviews · standardized 1–10 rating · grounded in historical rules</p>
+
+  <div class="row">
+    <div>
+      <label for="lang">Language (optional)</label>
+      <input id="lang" placeholder="python, javascript, sql…" />
+    </div>
+    <div>
+      <label for="uid">User ID</label>
+      <input id="uid" value="demo-user" />
+    </div>
+  </div>
+
+  <label for="code">Paste your code</label>
+  <textarea id="code" placeholder="Paste source code to review…"></textarea>
+
+  <button id="go">Review my code</button>
+  <p class="hint">Tip: Ctrl+Enter (⌘+Enter on Mac) submits.</p>
+
+  <div id="out"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const REQUEST_TIMEOUT_MS = 150000;
+let inFlight = false;
+
+async function submit() {
+  if (inFlight) return;
+  const code = $("code").value;
+  if (!code.trim()) { alert("Paste some code first."); return; }
+  const btn = $("go"); inFlight = true; btn.disabled = true; btn.textContent = "Reviewing…";
+  $("out").innerHTML = "";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  const started = performance.now();
+  try {
+    const res = await fetch("/review", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, language: $("lang").value || null, user_id: $("uid").value || "anonymous" }),
+      signal: ctrl.signal,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+      $("out").innerHTML = `<p style="color:#ef4444">${esc(detail || "Error")}</p>`;
+      return;
+    }
+    render(data, performance.now() - started);
+  } catch (e) {
+    const msg = e.name === "AbortError" ? "The review timed out. Please try again." : String(e);
+    $("out").innerHTML = `<p style="color:#ef4444">${esc(msg)}</p>`;
+  } finally {
+    clearTimeout(timer);
+    inFlight = false; btn.disabled = false; btn.textContent = "Review my code";
+  }
+}
+
+$("go").addEventListener("click", submit);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submit(); }
+});
+
+function timingLine(t, wallMs) {
+  if (!t) return "";
+  const s = (ms) => (ms / 1000).toFixed(1) + " s";
+  const parts = [];
+  if (t.redact_ms != null) parts.push(`redact ${s(t.redact_ms)}`);
+  if (t.ground_ms != null) parts.push(`ground ${s(t.ground_ms)}`);
+  if (t.review_ms != null) parts.push(`review ${s(t.review_ms)}`);
+  const breakdown = parts.length ? ` (${parts.join(" · ")})` : "";
+  return `Reviewed in ${s(wallMs)}${breakdown}`;
+}
+
+function render(d, wallMs) {
+  const findings = (d.findings || []).map(f => `
+    <div class="card">
+      <span class="sev ${esc((f.severity||"").toLowerCase())}">${esc(f.severity)}</span>
+      <b> ${esc(f.category)}</b> ${f.line ? `<span class="meta">· line ${esc(f.line)}</span>` : ""}
+      <p>${esc(f.explanation)}</p>
+      <p><b>Fix:</b> ${esc(f.suggested_fix)}</p>
+    </div>`).join("");
+  const list = (arr) => (arr||[]).map(x => `<li>${esc(x)}</li>`).join("");
+  $("out").innerHTML = `
+    <div class="rating">${esc(d.rating)}<small> / 10</small>
+      ${d.cached ? '<span class="badge" title="Identical code was reviewed recently; served from cache">cached</span>' : ""}
+    </div>
+    <p>${esc(d.summary)}</p>
+    <p class="meta">Grounded on rules: ${(d.grounded_on||[]).map(esc).join(", ") || "none"}
+       · DLP redaction: ${d.redactions && d.redactions.applied ? (d.redactions.changed ? "applied ✓" : "clean") : "n/a"}
+       · ${esc(timingLine(d.timings, wallMs))}</p>
+    <h3>Findings</h3>${findings || "<p>None 🎉</p>"}
+    <h3>Strengths</h3><ul>${list(d.strengths) || "<li>—</li>"}</ul>
+    <h3>Optimizations</h3><ul>${list(d.optimizations) || "<li>—</li>"}</ul>
+  `;
+}
+</script>
+</body>
+</html>
